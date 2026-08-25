@@ -18,18 +18,14 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Unzip project
+    - name: Unzip project and build
       run: |
-        unzip nova-nexus.zip -d extracted_project
-
-    - name: Grant execute permission for gradlew
-      run: |
-        cd extracted_project/*/ || cd extracted_project/* || cd extracted_project
+        mkdir -p extracted_project
+        unzip -q nova-nexus.zip -d extracted_project
+        cd extracted_project
+        PROJECT_DIR=$(find . -name "build.gradle*" -maxdepth 3 | head -n 1 | xargs dirname)
+        cd "$PROJECT_DIR"
         chmod +x gradlew
-
-    - name: Build APK with Gradle
-      run: |
-        cd extracted_project/*/ || cd extracted_project/* || cd extracted_project
         ./gradlew assembleDebug
 
     - name: Upload APK artifact
