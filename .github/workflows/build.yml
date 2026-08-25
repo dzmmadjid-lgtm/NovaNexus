@@ -25,21 +25,32 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Extract Android project
+      - name: Extract Android project (clic.zip)
         run: |
-          rm -rf project_files
-          mkdir -p project_files
-          unzip -o nova-nexus.zip -d project_files
+          rm -rf clic_project
+          mkdir -p clic_project
+          # تأكدنا من اسم الملف clic.zip
+          unzip -o clic.zip -d clic_project
 
           echo "======================================"
           echo "PROJECT EXTRACTED"
           echo "======================================"
 
-          cd project_files
+          cd clic_project
           ls -la
+          
+          # التأكد من وجود settings.gradle.kts و app
+          if [ -f "settings.gradle.kts" ]; then
+             echo "Project root found successfully!"
+          else
+             echo "WARNING: settings.gradle.kts not found in root. Moving deeper..."
+             # إذا كان الملف داخل مجلد فرعي، سننتقل إليه تلقائياً
+             cd "$(find . -maxdepth 2 -name "settings.gradle.kts" -printf '%h' -quit)"
+             ls -la
+          fi
 
       - name: Create debug keystore
-        working-directory: project_files
+        working-directory: clic_project
         run: |
           echo "======================================"
           echo "CREATING DEBUG KEYSTORE"
@@ -65,7 +76,7 @@ jobs:
           ls -lh debug.keystore
 
       - name: Check Gradle
-        working-directory: project_files
+        working-directory: clic_project
         run: |
           echo "======================================"
           echo "GRADLE VERSION"
@@ -74,10 +85,10 @@ jobs:
           gradle --version
 
       - name: Build Debug APK
-        working-directory: project_files
+        working-directory: clic_project
         run: |
           echo "======================================"
-          echo "BUILDING NOVANEXUS APK"
+          echo "BUILDING CLIC APK"
           echo "======================================"
 
           gradle :app:assembleDebug \
@@ -92,7 +103,7 @@ jobs:
           echo "APK FILES"
           echo "======================================"
 
-          find project_files \
+          find clic_project \
             -type f \
             -name "*.apk" \
             -print
@@ -101,8 +112,8 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: NovaNexus-debug-apk
-          path: project_files/app/build/outputs/apk/debug/*.apk
+          name: Clic-debug-apk
+          path: clic_project/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Build completed
@@ -110,11 +121,6 @@ jobs:
         run: |
           echo ""
           echo "======================================"
-          echo "     NOVANEXUS BUILD SUCCESS"
+          echo "       CLIC BUILD SUCCESS"
           echo "======================================"
           echo ""
-
-          find project_files/app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            -exec ls -lh {} \;
