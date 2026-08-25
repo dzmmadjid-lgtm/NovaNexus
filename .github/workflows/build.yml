@@ -25,13 +25,15 @@ jobs:
         
         # فك الضغط في مجلد العمل
         unzip nova-nexus.zip -d project_files
+        
+        # الانتقال إلى مجلد المشروع حيث يوجد settings.gradle.kts
         cd project_files
         
-        # بناء التطبيق مباشرة باستخدام gradle المثبت
+        # بناء التطبيق مباشرة
         gradle assembleDebug
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: app-debug
-        path: '**/build/outputs/apk/debug/*.apk'
+        path: 'project_files/**/build/outputs/apk/debug/*.apk'
