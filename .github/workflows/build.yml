@@ -18,13 +18,11 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Extract and Build APK
+    - name: Extract and Find Project
       run: |
-        unzip nova-nexus.zip -d app_files
-        # البحث عن مجلد المشروع الذي يحتوي على gradlew والانتقال إليه تلقائياً
-        GRADLEW_PATH=$(find app_files -name "gradlew" -maxdepth 3 | head -n 1)
-        PROJECT_DIR=$(dirname "$GRADLEW_PATH")
-        cd "$PROJECT_DIR"
+        unzip nova-nexus.zip -d extracted_files
+        # البحث عن مجلد يحتوي على gradlew والانتقال إليه لتنفيذ البناء
+        cd "$(find extracted_files -name "gradlew" -exec dirname {} \; | head -n 1)"
         chmod +x gradlew
         ./gradlew assembleDebug
 
