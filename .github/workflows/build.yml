@@ -12,26 +12,20 @@ jobs:
 
     steps:
 
-      # 1. تحميل المستودع
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. إعداد Java 17
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. إعداد Gradle
-      # لا نعتمد على Gradle الموجود في Ubuntu
-      # لأن المشروع لا يحتوي على gradlew داخل ملف ZIP.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
-      # 4. فك ضغط المشروع
       - name: Extract Android project
         run: |
           rm -rf project_files
@@ -40,60 +34,36 @@ jobs:
           unzip -o nova-nexus.zip -d project_files
 
           echo "======================================"
-          echo "Project extracted successfully"
+          echo "PROJECT STRUCTURE"
           echo "======================================"
 
-      # 5. فحص بنية المشروع
-      - name: Inspect project
-        run: |
           cd project_files
+          find . -maxdepth 3 -type f | sort
 
-          echo "======================================"
-          echo "CURRENT DIRECTORY"
-          echo "======================================"
-          pwd
-
-          echo "======================================"
-          echo "ROOT FILES"
-          echo "======================================"
-          ls -la
-
-          echo "======================================"
-          echo "APP DIRECTORY"
-          echo "======================================"
-
-          if [ -d "app" ]; then
-            ls -la app
-          else
-            echo "ERROR: app directory was not found!"
-            exit 1
-          fi
-
+      - name: Check project configuration
+        working-directory: project_files
+        run: |
           echo "======================================"
           echo "SETTINGS.GRADLE.KTS"
           echo "======================================"
 
-          if [ -f "settings.gradle.kts" ]; then
-            cat settings.gradle.kts
-          else
-            echo "ERROR: settings.gradle.kts was not found!"
-            exit 1
-          fi
+          cat settings.gradle.kts
 
+          echo ""
+          echo "======================================"
+          echo "ROOT BUILD.GRADLE.KTS"
+          echo "======================================"
+
+          cat build.gradle.kts
+
+          echo ""
           echo "======================================"
           echo "APP BUILD.GRADLE.KTS"
           echo "======================================"
 
-          if [ -f "app/build.gradle.kts" ]; then
-            cat app/build.gradle.kts
-          else
-            echo "ERROR: app/build.gradle.kts was not found!"
-            exit 1
-          fi
+          cat app/build.gradle.kts
 
-      # 6. إظهار مشاريع Gradle
-      # هذه الخطوة مهمة جدًا للتأكد أن :app مسجل فعليًا.
-      - name: Check Gradle projects
+      - name: Build APK
         working-directory: project_files
         run: |
           echo "======================================"
@@ -102,46 +72,29 @@ jobs:
 
           gradle --version
 
+          echo ""
           echo "======================================"
-          echo "GRADLE PROJECTS"
+          echo "BUILDING :app:assembleDebug"
           echo "======================================"
 
-          gradle projects
+          gradle :app:assembleDebug \
+            --stacktrace \
+            --info \
+            --no-daemon
 
-      # 7. عرض مهام البناء
-      - name: Check Android build tasks
-        working-directory: project_files
+      - name: Locate APK
+        if: success()
         run: |
           echo "======================================"
-          echo "AVAILABLE BUILD TASKS"
-          echo "======================================"
-
-          gradle :app:tasks --all
-
-      # 8. بناء APK
-      - name: Build Debug APK
-        working-directory: project_files
-        run: |
-          echo "======================================"
-          echo "BUILDING DEBUG APK"
-          echo "======================================"
-
-          gradle :app:assembleDebug --stacktrace --info
-
-      # 9. البحث عن APK الناتج
-      - name: Find APK
-        run: |
-          echo "======================================"
-          echo "SEARCHING FOR APK"
+          echo "APK FILES"
           echo "======================================"
 
           find project_files -type f -name "*.apk" -print
 
-      # 10. رفع APK كـ Artifact
-      - name: Upload APK artifact
+      - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: NovaNexus-debug-apk
-          path: |
-            project_files/app/build/outputs/apk/debug/*.apk
+          path: project_files/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
