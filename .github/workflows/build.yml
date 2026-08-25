@@ -11,41 +11,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ==========================================
-      # 1. تحميل المستودع
-      # ==========================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # ==========================================
-      # 2. إعداد Java 17
-      # ==========================================
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-
-      # ==========================================
-      # 3. إعداد Gradle 9.3.1
-      # ==========================================
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-
-      # ==========================================
-      # 4. فك ضغط مشروع Android
-      # ==========================================
       - name: Extract Android project
         run: |
           rm -rf project_files
           mkdir -p project_files
-
           unzip -o nova-nexus.zip -d project_files
 
           echo "======================================"
@@ -53,60 +36,46 @@ jobs:
           echo "======================================"
 
           cd project_files
-
-          echo "Current directory:"
-          pwd
-
-          echo ""
-          echo "Project files:"
           ls -la
 
-
-      # ==========================================
-      # 5. فحص إعدادات المشروع
-      # ==========================================
-      - name: Check project configuration
+      - name: Create debug keystore
         working-directory: project_files
         run: |
+          echo "======================================"
+          echo "CREATING DEBUG KEYSTORE"
+          echo "======================================"
 
+          if [ -f "debug.keystore" ]; then
+            echo "debug.keystore already exists."
+          else
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "debug.keystore created successfully."
+          fi
+
+          ls -lh debug.keystore
+
+      - name: Check Gradle
+        working-directory: project_files
+        run: |
           echo "======================================"
           echo "GRADLE VERSION"
           echo "======================================"
 
           gradle --version
 
-
-          echo ""
-          echo "======================================"
-          echo "SETTINGS.GRADLE.KTS"
-          echo "======================================"
-
-          cat settings.gradle.kts
-
-
-          echo ""
-          echo "======================================"
-          echo "ROOT BUILD.GRADLE.KTS"
-          echo "======================================"
-
-          cat build.gradle.kts
-
-
-          echo ""
-          echo "======================================"
-          echo "APP BUILD.GRADLE.KTS"
-          echo "======================================"
-
-          cat app/build.gradle.kts
-
-
-      # ==========================================
-      # 6. بناء APK
-      # ==========================================
       - name: Build Debug APK
         working-directory: project_files
         run: |
-
           echo "======================================"
           echo "BUILDING NOVANEXUS APK"
           echo "======================================"
@@ -116,16 +85,11 @@ jobs:
             --info \
             --no-daemon
 
-
-      # ==========================================
-      # 7. البحث عن APK
-      # ==========================================
       - name: Locate APK
         if: success()
         run: |
-
           echo "======================================"
-          echo "SEARCHING FOR APK"
+          echo "APK FILES"
           echo "======================================"
 
           find project_files \
@@ -133,10 +97,6 @@ jobs:
             -name "*.apk" \
             -print
 
-
-      # ==========================================
-      # 8. رفع APK إلى GitHub Actions
-      # ==========================================
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
@@ -145,17 +105,12 @@ jobs:
           path: project_files/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-
-      # ==========================================
-      # 9. إظهار نجاح البناء
-      # ==========================================
       - name: Build completed
         if: success()
         run: |
-
           echo ""
           echo "======================================"
-          echo "       NOVANEXUS BUILD SUCCESS"
+          echo "     NOVANEXUS BUILD SUCCESS"
           echo "======================================"
           echo ""
 
