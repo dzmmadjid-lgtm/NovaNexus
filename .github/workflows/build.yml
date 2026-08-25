@@ -25,102 +25,289 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Extract Android project (clic.zip)
+      # 1. فك الضغط بشكل آمن (نحذف أي ملفات قديمة أولاً)
+      - name: Extract Android project
         run: |
-          rm -rf clic_project
-          mkdir -p clic_project
-          # تأكدنا من اسم الملف clic.zip
-          unzip -o clic.zip -d clic_project
+          rm -rf project_files
+          mkdir -p project_files
+          unzip -o clic.zip -d project_files
 
           echo "======================================"
           echo "PROJECT EXTRACTED"
           echo "======================================"
 
-          cd clic_project
+          cd project_files
           ls -la
+
+      # 2. هذا السطر هو من سيقوم بإصلاح المشروع تلقائياً (Patch)
+      - name: Auto-Fix Project (Permissions & Downloads)
+        working-directory: project_files
+        run: |
+          echo "======================================"
+          echo "STARTING AUTO-FIX..."
+          echo "======================================"
+
+          # أ) تعديل AndroidManifest.xml لإضافة أذونات التخزين
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MyApplication"
+        android:usesCleartextTraffic="true"
+        tools:targetApi="31">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MyApplication">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+          echo "AndroidManifest.xml fixed!"
+
+          # ب) تعديل MainActivity.kt لإضافة مستمع التنزيلات
+          # العثور على مسار ملف MainActivity.kt تلقائياً
+          MAIN_ACTIVITY_PATH=$(find app/src/main/java -name "MainActivity.kt" | head -n 1)
           
-          # التأكد من وجود settings.gradle.kts و app
-          if [ -f "settings.gradle.kts" ]; then
-             echo "Project root found successfully!"
+          if [ -n "$MAIN_ACTIVITY_PATH" ]; then
+             echo "Found MainActivity at: $MAIN_ACTIVITY_PATH"
+             
+             # استبدال الملف بنسخة مصححة تحتوي على DownloadListener وكل المكتبات اللازمة
+             cat > "$MAIN_ACTIVITY_PATH" << 'EOF'
+package com.example
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.DownloadManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.os.Environment
+import android.view.ViewGroup
+import android.webkit.*
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.AndroidView
+import com.example.ui.theme.BgDark
+import com.example.ui.theme.MyApplicationTheme
+
+class MainActivity : ComponentActivity() {
+
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val filePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val intent = result.data
+            val results: Array<Uri>? = when {
+                intent?.data != null -> arrayOf(intent.data!!)
+                intent?.clipData != null -> {
+                    val clipData = intent.clipData!!
+                    Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
+                }
+                else -> null
+            }
+            filePathCallback?.onReceiveValue(results)
+        } else {
+            filePathCallback?.onReceiveValue(null)
+        }
+        filePathCallback = null
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            MyApplicationTheme {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(BgDark)
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                ) {
+                    ClickSchoolWebView(
+                        onOpenFileChooser = { callback, params ->
+                            filePathCallback = callback
+                            val intent = params.createIntent()
+                            try {
+                                filePickerLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                filePathCallback = null
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun ClickSchoolWebView(
+    onOpenFileChooser: (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams) -> Unit
+) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            WebView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+
+                settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    databaseEnabled = true
+                    allowFileAccess = true
+                    allowContentAccess = true
+                    allowFileAccessFromFileURLs = true
+                    allowUniversalAccessFromFileURLs = true
+                    setSupportZoom(true)
+                    builtInZoomControls = true
+                    displayZoomControls = false
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
+                    cacheMode = WebSettings.LOAD_DEFAULT
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                }
+
+                setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+                    try {
+                        val request = DownloadManager.Request(Uri.parse(url))
+                        request.setMimeType(mimetype)
+                        request.addRequestHeader("User-Agent", userAgent)
+                        request.setDescription("جارٍ تحميل الملف...")
+                        request.setTitle(URLUtil.guessFileName(url, contentDisposition, mimetype))
+                        
+                        request.setDestinationInExternalPublicDir(
+                            Environment.DIRECTORY_DOWNLOADS,
+                            URLUtil.guessFileName(url, contentDisposition, mimetype)
+                        )
+                        request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+
+                        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        dm.enqueue(request)
+                        
+                        Toast.makeText(context, "سيتم تنزيل الملف في مجلد التنزيلات", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        } catch (ex: Exception) {
+                            Toast.makeText(context, "تعذر تحميل الملف", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+
+                webChromeClient = object : WebChromeClient() {
+                    override fun onShowFileChooser(
+                        webView: WebView?,
+                        filePathCallback: ValueCallback<Array<Uri>>?,
+                        fileChooserParams: FileChooserParams?
+                    ): Boolean {
+                        if (filePathCallback != null && fileChooserParams != null) {
+                            onOpenFileChooser(filePathCallback, fileChooserParams)
+                            return true
+                        }
+                        return false
+                    }
+                }
+
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): Boolean {
+                        val url = request?.url?.toString() ?: ""
+                        if (url.startsWith("file://") || url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:") || url.startsWith("blob:")) {
+                            return false
+                        }
+                        return try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                            true
+                        } catch (e: Exception) {
+                            false
+                        }
+                    }
+                }
+
+                loadUrl("file:///android_asset/index.html")
+            }
+        }
+    )
+}
+EOF
+             echo "MainActivity.kt fixed!"
           else
-             echo "WARNING: settings.gradle.kts not found in root. Moving deeper..."
-             # إذا كان الملف داخل مجلد فرعي، سننتقل إليه تلقائياً
-             cd "$(find . -maxdepth 2 -name "settings.gradle.kts" -printf '%h' -quit)"
-             ls -la
+             echo "ERROR: MainActivity.kt not found!"
+             exit 1
           fi
 
+      # 3. إنشاء مفتاح التوقيع
       - name: Create debug keystore
-        working-directory: clic_project
+        working-directory: project_files
         run: |
-          echo "======================================"
-          echo "CREATING DEBUG KEYSTORE"
-          echo "======================================"
+          keytool -genkeypair \
+            -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-          if [ -f "debug.keystore" ]; then
-            echo "debug.keystore already exists."
-          else
-            keytool -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-
-            echo "debug.keystore created successfully."
-          fi
-
-          ls -lh debug.keystore
-
-      - name: Check Gradle
-        working-directory: clic_project
-        run: |
-          echo "======================================"
-          echo "GRADLE VERSION"
-          echo "======================================"
-
-          gradle --version
-
+      # 4. البناء
       - name: Build Debug APK
-        working-directory: clic_project
+        working-directory: project_files
         run: |
-          echo "======================================"
-          echo "BUILDING CLIC APK"
-          echo "======================================"
+          gradle :app:assembleDebug --stacktrace --no-daemon
 
-          gradle :app:assembleDebug \
-            --stacktrace \
-            --info \
-            --no-daemon
-
-      - name: Locate APK
-        if: success()
-        run: |
-          echo "======================================"
-          echo "APK FILES"
-          echo "======================================"
-
-          find clic_project \
-            -type f \
-            -name "*.apk" \
-            -print
-
+      # 5. رفع الملف النهائي
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Clic-debug-apk
-          path: clic_project/**/build/outputs/apk/debug/*.apk
+          path: project_files/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
-      - name: Build completed
-        if: success()
-        run: |
-          echo ""
-          echo "======================================"
-          echo "       CLIC BUILD SUCCESS"
-          echo "======================================"
-          echo ""
