@@ -18,14 +18,17 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Extract and Generate Gradle Wrapper
+    - name: Install Gradle and Build
       run: |
-        unzip nova-nexus.zip -d app_files
-        cd app_files
-        # توليد ملف gradlew تلقائياً إذا لم يكن موجوداً لتشغيل البناء فوراً
-        gradle wrapper --gradle-version 8.5
-        chmod +x gradlew
-        ./gradlew assembleDebug
+        # تثبيت أداة Gradle مباشرة في نظام أوبونتو السحابي
+        sudo apt-get update && sudo apt-get install -y gradle
+        
+        # فك الضغط في مجلد العمل
+        unzip nova-nexus.zip -d project_files
+        cd project_files
+        
+        # بناء التطبيق مباشرة باستخدام gradle المثبت
+        gradle assembleDebug
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
