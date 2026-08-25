@@ -18,13 +18,10 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Unzip project and build
+    - name: Extract and Build APK
       run: |
-        mkdir -p extracted_project
-        unzip -q nova-nexus.zip -d extracted_project
-        cd extracted_project
-        PROJECT_DIR=$(find . -name "build.gradle*" -maxdepth 3 | head -n 1 | xargs dirname)
-        cd "$PROJECT_DIR"
+        unzip nova-nexus.zip -d app_files
+        cd app_files
         chmod +x gradlew
         ./gradlew assembleDebug
 
