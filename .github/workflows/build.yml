@@ -20,17 +20,25 @@ jobs:
 
     - name: Install Gradle and Build
       run: |
-        # تثبيت أداة Gradle مباشرة في نظام أوبونتو السحابي
         sudo apt-get update && sudo apt-get install -y gradle
         
-        # فك الضغط في مجلد العمل
+        # 1. فك الضغط في مجلد العمل
         unzip nova-nexus.zip -d project_files
         
-        # الانتقال إلى مجلد المشروع حيث يوجد settings.gradle.kts
+        # 2. الدخول إلى مجلد المشروع الرئيسي
         cd project_files
         
-        # بناء التطبيق مباشرة
-        gradle assembleDebug
+        # 3. البحث تلقائياً عن مجلد الـ ZIp الداخلي (إذا وُجد) والدخول إليه
+        # إذا كان الملف يحتوي على مجلد مثل nova-nexus بداخله، هذه الخطوة ستدخل إليه
+        cd "$(find . -maxdepth 1 -type d ! -name '.' | head -n 1)"
+        
+        # 4. طباعة الملفات للتأكد أننا في المكان الصحيح
+        echo "المجلد الحالي هو:"
+        pwd
+        ls -la
+        
+        # 5. بناء التطبيق
+        gradle :app:assembleDebug
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
