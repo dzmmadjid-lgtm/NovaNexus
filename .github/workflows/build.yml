@@ -22,20 +22,25 @@ jobs:
       run: |
         sudo apt-get update && sudo apt-get install -y gradle
         
-        # فك الضغط
+        # 1. فك الضغط في مجلد العمل
         unzip nova-nexus.zip -d project_files
+        
+        # 2. الدخول إلى المجلد الرئيسي الذي يحتوي على settings.gradle.kts
         cd project_files
         
-        # البحث عن المجلد الداخلي والدخول إليه تلقائياً
-        cd "$(find . -maxdepth 1 -type d ! -name '.' | head -n 1)"
+        # 3. البحث عن المجلد الداخلي (مثل nova-nexus) والدخول إليه إذا كان موجوداً
+        # إذا لم يوجد مجلد داخلي، سيظل في project_files
+        if [ -d "$(find . -maxdepth 1 -type d ! -name '.' | head -n 1)" ]; then
+          cd "$(find . -maxdepth 1 -type d ! -name '.' | head -n 1)"
+        fi
         
-        # عرض الملفات للتأكد من أننا في المكان الصحيح
+        # 4. عرض الملفات للتأكد من وجود settings.gradle.kts هنا
         echo "المجلد الحالي هو:"
         pwd
         ls -la
         
-        # بناء التطبيق (بدون تحديد :app: لأن المجلد اسمه app_files)
-        gradle assembleDebug
+        # 5. بناء التطبيق (الأمر الصحيح هو بناء وحدة app)
+        gradle :app:assembleDebug
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
