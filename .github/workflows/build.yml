@@ -18,11 +18,12 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Extract and Find Project
+    - name: Extract and Generate Gradle Wrapper
       run: |
-        unzip nova-nexus.zip -d extracted_files
-        # البحث عن مجلد يحتوي على gradlew والانتقال إليه لتنفيذ البناء
-        cd "$(find extracted_files -name "gradlew" -exec dirname {} \; | head -n 1)"
+        unzip nova-nexus.zip -d app_files
+        cd app_files
+        # توليد ملف gradlew تلقائياً إذا لم يكن موجوداً لتشغيل البناء فوراً
+        gradle wrapper --gradle-version 8.5
         chmod +x gradlew
         ./gradlew assembleDebug
 
