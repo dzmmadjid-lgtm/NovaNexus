@@ -1,18 +1,153 @@
-name: Build Android APK
+name: Strict Dynamic Android Builder
 
 on:
+  push:
+    branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      target_zip:
+        description: 'Specific ZIP filename to build'
+        required: false
+        default: ''
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
 
-      - name: Show all repository files
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: 2. Locate and Verify Target Project
+        id: verify_step
         run: |
-          echo "=== محتويات المستودع الحالية ==="
-          ls -la
-          echo "=== البحث عن ملفات gradle في المستودع ==="
-          find . -name "*gradle*"
+          echo "========================================================"
+          echo "🔍 AUDIT: VALIDATING TARGET PROJECT ZIP FILE"
+          echo "========================================================"
+          
+          SPECIFIED_ZIP="${{ github.event.inputs.target_zip }}"
+          CHOSEN_ZIP=""
+          
+          if [ -n "$SPECIFIED_ZIP" ]; then
+            echo "Explicit target project requested: '$SPECIFIED_ZIP'"
+            if [ -f "$SPECIFIED_ZIP" ]; then
+              CHOSEN_ZIP="$SPECIFIED_ZIP"
+            else
+              echo "❌ ERROR: Requested file '$SPECIFIED_ZIP' was NOT found in repository!"
+              exit 1
+            fi
+          else
+            ZIP_COUNT=$(find . -maxdepth 2 -type f -name "*.zip" | wc -l)
+            if [ "$ZIP_COUNT" -gt 0 ]; then
+              CHOSEN_ZIP=$(find . -maxdepth 2 -type f -name "*.zip" -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
+              echo "Auto-selected newest ZIP archive: $CHOSEN_ZIP"
+            else
+              echo "Using direct repository source."
+            fi
+          fi
+
+          if [ -n "$CHOSEN_ZIP" ] && [ -f "$CHOSEN_ZIP" ]; then
+            FILE_SIZE=$(ls -lh "$CHOSEN_ZIP" | awk '{print $5}')
+            echo "TRANSFERRED_FILE=$CHOSEN_ZIP" >> $GITHUB_ENV
+            echo "TRANSFERRED_FILE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
+            echo "IS_ZIP=true" >> $GITHUB_ENV
+          else
+            echo "TRANSFERRED_FILE=Direct-Repo-Source" >> $GITHUB_ENV
+            echo "TRANSFERRED_FILE_SIZE=N/A" >> $GITHUB_ENV
+            echo "IS_ZIP=false" >> $GITHUB_ENV
+          fi
+          echo "SELECTED_FILE=${SPECIFIED_ZIP:-$CHOSEN_ZIP}" >> $GITHUB_ENV
+
+      - name: 3. Create Fresh Isolated Workspace & Extract
+        run: |
+          ISOLATED_DIR="${{ runner.temp }}/isolated_build_workspace_$(date +%s)"
+          rm -rf "$ISOLATED_DIR"
+          mkdir -p "$ISOLATED_DIR"
+          
+          if [ "$IS_ZIP" = "true" ]; then
+            unzip -q -o "$TRANSFERRED_FILE" -d "$ISOLATED_DIR"
+          else
+            rsync -av --exclude='.git' --exclude='.github' ./ "$ISOLATED_DIR/"
+          fi
+          echo "EXTRACTED_PATH=$ISOLATED_DIR" >> $GITHUB_ENV
+
+      - name: 4. Detect True Project Root & Settings
+        run: |
+          SETTINGS_FILE=$(find "$EXTRACTED_PATH" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "❌ CRITICAL ERROR: Could not locate 'settings.gradle' or 'settings.gradle.kts'!"
+            exit 1
+          fi
+          
+          REAL_ROOT=$(dirname "$SETTINGS_FILE")
+          PROJECT_NAME=$(grep -oE 'rootProject\.name\s*=\s*["'"'"'][^"'"'"']+["'"'"']' "$SETTINGS_FILE" | sed -E 's/rootProject\.name\s*=\s*["'"'"']([^"'"'"']+)["'"'"']/\1/' | head -n 1)
+          if [ -z "$PROJECT_NAME" ]; then
+            PROJECT_NAME="AndroidApp"
+          fi
+
+          WRAPPER_PROP="$REAL_ROOT/gradle/wrapper/gradle-wrapper.properties"
+          DETECTED_GRADLE="9.3.1"
+          if [ -f "$WRAPPER_PROP" ]; then
+            PARSED_VER=$(grep -oE 'gradle-[0-9]+\.[0-9]+(\.[0-9]+)?' "$WRAPPER_PROP" | sed 's/gradle-//' | head -n 1)
+            if [ -n "$PARSED_VER" ]; then
+              DETECTED_GRADLE="$PARSED_VER"
+            fi
+          fi
+
+          echo "========================================================"
+          echo "📊 MANDATORY AUDIT PROOF LOGS:"
+          echo "SELECTED_FILE=$SELECTED_FILE"
+          echo "TRANSFERRED_FILE=$TRANSFERRED_FILE"
+          echo "TRANSFERRED_FILE_SIZE=$TRANSFERRED_FILE_SIZE"
+          echo "EXTRACTED_PATH=$EXTRACTED_PATH"
+          echo "PROJECT_ROOT=$REAL_ROOT"
+          echo "ROOT_PROJECT_NAME=$PROJECT_NAME"
+          echo "DETECTED_GRADLE=$DETECTED_GRADLE"
+          echo "========================================================"
+
+          echo "PROJECT_ROOT=$REAL_ROOT" >> $GITHUB_ENV
+          echo "ROOT_PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "DETECTED_GRADLE=$DETECTED_GRADLE" >> $GITHUB_ENV
+
+      - name: 5. Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: 6. Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 7. Setup Gradle (${{ env.DETECTED_GRADLE }})
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.DETECTED_GRADLE }}
+
+      - name: 8. Prepare Local Environment
+        run: |
+          cd "$PROJECT_ROOT"
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          touch .env .env.example local.properties
+
+      - name: 9. Execute Verified Build
+        run: |
+          cd "$PROJECT_ROOT"
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: 10. Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ env.ROOT_PROJECT_NAME }}-debug-apk"
+          path: "${{ env.PROJECT_ROOT }}/**/build/outputs/apk/debug/*.apk"
+          retention-days: 14
