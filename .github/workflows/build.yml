@@ -1,175 +1,346 @@
 name: Strict Dynamic Android Builder
 
 on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
     inputs:
       target_zip:
-        description: 'Specific ZIP filename to build (optional, e.g. architecture-samples-main.zip)'
-        required: false
-        default: ''
+        description: "Exact ZIP filename to build"
+        required: true
+        type: string
+
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout Clean Repository
+
+      # ============================================================
+      # 1. Checkout repository
+      # ============================================================
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
         with:
           clean: true
           fetch-depth: 1
 
-      - name: 2. Locate and Verify Selected Target Project
-        id: select_project
+      # ============================================================
+      # 2. Show exactly what was requested
+      # ============================================================
+      - name: 2. Verify Requested Project
+        shell: bash
         run: |
-          echo "========================================================"
-          echo "🔍 AUDIT: VALIDATING TARGET PROJECT ZIP FILE"
-          echo "========================================================"
-          
-          SPECIFIED_ZIP="${{ github.event.inputs.target_zip }}"
-          TARGET_ZIP=""
+          set -euo pipefail
 
-          if [ -n "$SPECIFIED_ZIP" ]; then
-            echo "User requested specific project: $SPECIFIED_ZIP"
-            if [ -f "$SPECIFIED_ZIP" ]; then
-              TARGET_ZIP="$SPECIFIED_ZIP"
-            else
-              echo "❌ CRITICAL ERROR: Requested file '$SPECIFIED_ZIP' was NOT found in the repository!"
-              echo "Available files in repository root:"
-              ls -la
-              exit 1
-            fi
-          else
-            # Search for zip files in repository
-            ZIP_COUNT=$(find . -maxdepth 2 -type f -name "*.zip" | wc -l)
-            echo "Total zip files detected in repository: $ZIP_COUNT"
-            find . -maxdepth 2 -type f -name "*.zip" -exec ls -lh {} +
-            
-            if [ "$ZIP_COUNT" -gt 0 ]; then
-              # Pick the newest zip file
-              TARGET_ZIP=$(find . -maxdepth 2 -type f -name "*.zip" -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
-              echo "🎯 Auto-selected newest ZIP archive: $TARGET_ZIP"
-            else
-              echo "⚠️ No ZIP file found in repository. Checking if direct project source exists..."
-              if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-                echo "❌ CRITICAL ERROR: Neither a target ZIP nor an Android project root was found!"
-                exit 1
-              fi
-            fi
-          fi
-
-          echo "TARGET_ZIP=$TARGET_ZIP" >> $GITHUB_ENV
-
-      - name: 3. Create Fresh Isolated Workspace & Extract
-        id: extract_project
-        run: |
           echo "========================================================"
-          echo "📦 AUDIT: EXTRACTING INTO FRESH ISOLATED WORKSPACE"
+          echo "TARGET PROJECT VERIFICATION"
           echo "========================================================"
-          
-          ISOLATED_DIR="${{ runner.temp }}/isolated_build_workspace_$(date +%s)"
-          rm -rf "$ISOLATED_DIR"
-          mkdir -p "$ISOLATED_DIR"
-          
-          if [ -n "$TARGET_ZIP" ] && [ -f "$TARGET_ZIP" ]; then
-            echo "Extracting: $TARGET_ZIP -> $ISOLATED_DIR"
-            unzip -q -o "$TARGET_ZIP" -d "$ISOLATED_DIR"
-          else
-            echo "Copying repository files into isolated workspace..."
-            rsync -av --exclude='.git' --exclude='.github' ./ "$ISOLATED_DIR/"
-          fi
 
-          echo "ISOLATED_DIR=$ISOLATED_DIR" >> $GITHUB_ENV
+          TARGET_ZIP="${{ github.event.inputs.target_zip }}"
 
-      - name: 4. Detect & Validate Project Root & Name
-        id: validate_root
-        run: |
-          echo "========================================================"
-          echo "🔎 AUDIT: DETECTING AND VERIFYING REAL PROJECT ROOT"
-          echo "========================================================"
-          
-          # Search for settings.gradle or settings.gradle.kts
-          SETTINGS_PATH=$(find "$ISOLATED_DIR" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
-          
-          if [ -z "$SETTINGS_PATH" ]; then
-            echo "❌ CRITICAL ERROR: Could not locate 'settings.gradle' or 'settings.gradle.kts' in extracted workspace!"
-            echo "Workspace content tree:"
-            find "$ISOLATED_DIR" -maxdepth 3
+          echo "Requested ZIP:"
+          echo "$TARGET_ZIP"
+
+          if [ -z "$TARGET_ZIP" ]; then
+            echo ""
+            echo "ERROR: No target ZIP was provided."
+            echo "The builder is NOT allowed to automatically select another project."
             exit 1
           fi
-          
-          REAL_ROOT=$(dirname "$SETTINGS_PATH")
-          
-          # Verify build.gradle exists alongside or inside modules
-          if [ ! -f "$REAL_ROOT/build.gradle" ] && [ ! -f "$REAL_ROOT/build.gradle.kts" ]; then
-            echo "❌ CRITICAL ERROR: Found settings.gradle but missing root build.gradle(.kts) in $REAL_ROOT"
+
+          echo ""
+          echo "Repository root contents:"
+          find . -maxdepth 2 -type f | sort
+
+          echo ""
+          echo "Searching for exact requested file..."
+
+          FOUND_FILE="$(find . -type f -name "$(basename "$TARGET_ZIP")" | head -n 1 || true)"
+
+          if [ -z "$FOUND_FILE" ]; then
+            echo ""
+            echo "========================================================"
+            echo "ERROR: REQUESTED PROJECT WAS NOT FOUND"
+            echo "========================================================"
+            echo "Requested:"
+            echo "$TARGET_ZIP"
+            echo ""
+            echo "ZIP files actually available in repository:"
+            find . -type f -name "*.zip" -print || true
+            echo ""
+            echo "The workflow will NOT choose another ZIP."
             exit 1
           fi
-          
-          # Extract root project name from settings.gradle / settings.gradle.kts
-          PROJECT_NAME=$(grep -oE 'rootProject\.name\s*=\s*["'"'"'][^"'"'"']+["'"'"']' "$SETTINGS_PATH" | sed -E 's/rootProject\.name\s*=\s*["'"'"']([^"'"'"']+)["'"'"']/\1/' | head -n 1)
+
+          echo ""
+          echo "FOUND_FILE=$FOUND_FILE"
+
+          FILE_SIZE="$(stat -c%s "$FOUND_FILE")"
+
+          echo "FILE_SIZE=$FILE_SIZE bytes"
+
+          if [ "$FILE_SIZE" -le 0 ]; then
+            echo "ERROR: ZIP file is empty."
+            exit 1
+          fi
+
+          echo "TARGET_ZIP=$FOUND_FILE" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # 3. Create completely fresh workspace
+      # ============================================================
+      - name: 3. Create Fresh Isolated Workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WORKSPACE="${RUNNER_TEMP}/isolated_build_workspace_${GITHUB_RUN_ID}"
+
+          rm -rf "$WORKSPACE"
+          mkdir -p "$WORKSPACE"
+
+          echo "ISOLATED_WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+
+          echo "========================================================"
+          echo "FRESH WORKSPACE"
+          echo "========================================================"
+          echo "$WORKSPACE"
+
+      # ============================================================
+      # 4. Extract ONLY the selected ZIP
+      # ============================================================
+      - name: 4. Extract Selected Project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================================"
+          echo "EXTRACTING SELECTED PROJECT"
+          echo "========================================================"
+
+          echo "Selected:"
+          echo "$TARGET_ZIP"
+
+          echo ""
+          echo "Extracting into:"
+          echo "$ISOLATED_WORKSPACE"
+
+          unzip -q -o "$TARGET_ZIP" -d "$ISOLATED_WORKSPACE"
+
+          echo ""
+          echo "Extraction completed."
+
+          echo ""
+          echo "Extracted files:"
+          find "$ISOLATED_WORKSPACE" -maxdepth 4 -type f | sort | head -300
+
+      # ============================================================
+      # 5. Detect the REAL Gradle project root
+      # ============================================================
+      - name: 5. Detect Real Project Root
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================================"
+          echo "PROJECT ROOT DETECTION"
+          echo "========================================================"
+
+          SETTINGS_FILE="$(
+            find "$ISOLATED_WORKSPACE" \
+              -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -print | head -n 1
+          )"
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo ""
+            echo "ERROR: No settings.gradle or settings.gradle.kts found."
+            echo ""
+            echo "Extracted workspace:"
+            find "$ISOLATED_WORKSPACE" -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_ROOT="$(dirname "$SETTINGS_FILE")"
+
+          echo "SETTINGS_FILE=$SETTINGS_FILE"
+          echo "PROJECT_ROOT=$PROJECT_ROOT"
+
+          if [ -f "$PROJECT_ROOT/build.gradle.kts" ]; then
+            ROOT_BUILD_FILE="$PROJECT_ROOT/build.gradle.kts"
+          elif [ -f "$PROJECT_ROOT/build.gradle" ]; then
+            ROOT_BUILD_FILE="$PROJECT_ROOT/build.gradle"
+          else
+            echo ""
+            echo "ERROR: Root build.gradle(.kts) not found."
+            exit 1
+          fi
+
+          echo "ROOT_BUILD_FILE=$ROOT_BUILD_FILE"
+
+          # Try to read rootProject.name
+          PROJECT_NAME="$(
+            grep -oE \
+            'rootProject\.name[[:space:]]*=[[:space:]]*["'\''][^"'\'']+["'\'']' \
+            "$SETTINGS_FILE" \
+            | head -n 1 \
+            | sed -E 's/.*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/' \
+            || true
+          )"
+
           if [ -z "$PROJECT_NAME" ]; then
-            PROJECT_NAME="Unknown (No rootProject.name in settings)"
+            PROJECT_NAME="$(basename "$PROJECT_ROOT")"
           fi
 
-          # Output required verification logs
-          echo "========================================================"
-          echo "📊 MANDATORY AUDIT LOGS:"
-          echo "SELECTED_FILE=${{ github.event.inputs.target_zip || env.TARGET_ZIP }}"
-          echo "TRANSFERRED_FILE=$TARGET_ZIP"
-          echo "EXTRACTED_PATH=$ISOLATED_DIR"
-          echo "PROJECT_ROOT=$REAL_ROOT"
           echo "ROOT_PROJECT_NAME=$PROJECT_NAME"
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "ROOT_PROJECT_NAME=$PROJECT_NAME" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # 6. Final audit BEFORE Gradle
+      # ============================================================
+      - name: 6. Final Project Audit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================================"
+          echo "FINAL BUILD AUDIT"
           echo "========================================================"
 
-          echo "PROJECT_ROOT=$REAL_ROOT" >> $GITHUB_ENV
-          echo "ROOT_PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "SELECTED_FILE=$TARGET_ZIP"
+          echo "EXTRACTED_PATH=$ISOLATED_WORKSPACE"
+          echo "PROJECT_ROOT=$PROJECT_ROOT"
+          echo "ROOT_PROJECT_NAME=$ROOT_PROJECT_NAME"
 
-      - name: 5. Set up JDK 17
+          echo ""
+          echo "Project root contents:"
+          ls -la "$PROJECT_ROOT"
+
+          echo ""
+          echo "Gradle wrapper check:"
+
+          if [ -f "$PROJECT_ROOT/gradlew" ]; then
+            echo "gradlew FOUND"
+          else
+            echo "gradlew NOT FOUND"
+            echo "System Gradle will NOT be used automatically."
+          fi
+
+          echo ""
+          echo "Gradle wrapper properties:"
+
+          if [ -f "$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties" ]; then
+            cat "$PROJECT_ROOT/gradle/wrapper/gradle-wrapper.properties"
+          else
+            echo "No Gradle wrapper properties found."
+          fi
+
+      # ============================================================
+      # 7. Java
+      # ============================================================
+      - name: 7. Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
 
-      - name: 6. Setup Android SDK
+      # ============================================================
+      # 8. Android SDK
+      # ============================================================
+      - name: 8. Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 7. Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.11.1
-
-      - name: 8. Prepare Local Environment in True Root
+      # ============================================================
+      # 9. Build using PROJECT'S OWN Gradle Wrapper
+      # ============================================================
+      - name: 9. Build Selected Project
+        shell: bash
         run: |
-          cd "$PROJECT_ROOT"
-          
-          # Ensure essential debug keystore exists
-          if [ ! -f "debug.keystore" ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          
-          touch .env .env.example local.properties
+          set -euo pipefail
 
-      - name: 9. Build Verified Target Project
+          echo "========================================================"
+          echo "BUILDING SELECTED PROJECT"
+          echo "========================================================"
+
+          echo "PROJECT:"
+          echo "$ROOT_PROJECT_NAME"
+
+          echo ""
+          echo "ROOT:"
+          echo "$PROJECT_ROOT"
+
+          cd "$PROJECT_ROOT"
+
+          if [ ! -f "./gradlew" ]; then
+            echo ""
+            echo "ERROR: This project does not contain gradlew."
+            echo "Refusing to use an unrelated system Gradle version."
+            exit 1
+          fi
+
+          chmod +x ./gradlew
+
+          echo ""
+          echo "Gradle version selected by project:"
+          ./gradlew --version
+
+          echo ""
+          echo "Starting assembleDebug..."
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # ============================================================
+      # 10. Find APK
+      # ============================================================
+      - name: 10. Locate APK
+        if: success()
+        shell: bash
         run: |
-          echo "🚀 Executing build for: $ROOT_PROJECT_NAME in $PROJECT_ROOT"
-          cd "$PROJECT_ROOT"
-          
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          else
-            gradle assembleDebug --no-daemon --stacktrace
+          set -euo pipefail
+
+          echo "========================================================"
+          echo "SEARCHING FOR APK"
+          echo "========================================================"
+
+          APK_COUNT="$(find "$PROJECT_ROOT" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            | wc -l)"
+
+          echo "APK_COUNT=$APK_COUNT"
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: Build succeeded but no debug APK was found."
+            exit 1
           fi
 
-      - name: 10. Upload Debug APK
+          find "$PROJECT_ROOT" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print
+
+      # ============================================================
+      # 11. Upload APK
+      # ============================================================
+      - name: 11. Upload Debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: "${{ env.ROOT_PROJECT_NAME }}-debug-apk"
           path: "${{ env.PROJECT_ROOT }}/**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: error
           retention-days: 14
