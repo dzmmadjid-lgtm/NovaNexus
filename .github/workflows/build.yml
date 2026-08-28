@@ -13,8 +13,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          clean: true
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -27,57 +25,16 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: CLEAN OLD PROJECT FILES
-        run: |
-          echo "======================================"
-          echo "CLEANING OLD FILES"
-          echo "======================================"
-          
-          # حذف جميع ملفات المشروع القديمة
-          rm -rf project_files
-          rm -rf nova-nexus.zip
-          rm -rf *.zip
-          
-          # حذف أي APK قديم
-          find . -name "*.apk" -type f -delete
-          
-          # حذف caches
-          rm -rf ~/.gradle/caches/
-          rm -rf .gradle
-          
-          echo "All old files cleaned!"
-          ls -la
-
-      - name: Download latest project ZIP
-        run: |
-          echo "======================================"
-          echo "DOWNLOADING LATEST PROJECT"
-          echo "======================================"
-          
-          # تحميل أحدث ملف ZIP من repository
-          # الطريقة الأولى: إذا كان الملف موجود في repository
-          if [ -f "nova-nexus.zip" ]; then
-            echo "Found nova-nexus.zip"
-          else
-            echo "ERROR: nova-nexus.zip not found!"
-            echo "Files in repository:"
-            ls -la
-            exit 1
-          fi
-
       - name: Extract Android project
         run: |
-          echo "======================================"
-          echo "EXTRACTING PROJECT"
-          echo "======================================"
-          
           rm -rf project_files
           mkdir -p project_files
-          
-          # استخراج الملف الجديد
           unzip -o nova-nexus.zip -d project_files
-          
-          echo "Project extracted successfully!"
+
+          echo "======================================"
+          echo "PROJECT EXTRACTED"
+          echo "======================================"
+
           cd project_files
           ls -la
 
@@ -120,19 +77,13 @@ jobs:
         working-directory: project_files
         run: |
           echo "======================================"
-          echo "BUILDING APK"
+          echo "BUILDING NOVANEXUS APK"
           echo "======================================"
 
-          # تنظيف قبل البناء
-          gradle clean --no-daemon
-          
-          # بناء APK جديد
           gradle :app:assembleDebug \
             --stacktrace \
             --info \
-            --no-daemon \
-            --no-build-cache \
-            --rerun-tasks
+            --no-daemon
 
       - name: Locate APK
         if: success()
@@ -150,7 +101,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: NovaNexus-debug-apk-$(date +%Y%m%d-%H%M%S)
+          name: NovaNexus-debug-apk
           path: project_files/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
@@ -159,7 +110,7 @@ jobs:
         run: |
           echo ""
           echo "======================================"
-          echo "     BUILD SUCCESS"
+          echo "     NOVANEXUS BUILD SUCCESS"
           echo "======================================"
           echo ""
 
