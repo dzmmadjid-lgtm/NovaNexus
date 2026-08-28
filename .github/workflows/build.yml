@@ -23,24 +23,16 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-
-      - name: Grant execute permission for gradlew
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x gradlew
-          fi
+        with:
+          gradle-version: 8.5
+          cache-disabled: true
 
       - name: Build Debug APK
-        run: |
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --no-daemon --stacktrace
-          else
-            gradle assembleDebug --no-daemon --stacktrace
-          fi
+        run: gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Locate and Upload Debug APK
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: pubg-ping-booster-apk
+          name: pubg-ping-booster-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 7
