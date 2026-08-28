@@ -2,7 +2,8 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -14,112 +15,155 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: true
-          fetch-depth: 1
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
+          distribution: temurin
           java-version: '17'
-          distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.11.1
+          gradle-version: '9.3.1'
 
-      - name: CLEAN EVERYTHING
+      - name: CLEAN OLD PROJECT FILES
         run: |
-          # إيقاف gradle daemon
-          gradle --stop || true
+          echo "======================================"
+          echo "CLEANING OLD FILES"
+          echo "======================================"
           
-          # حذف جميع الـ caches
-          rm -rf ~/.gradle/caches/
-          rm -rf ~/.gradle/wrapper/
-          rm -rf ~/.m2/repository/
+          # حذف جميع ملفات المشروع القديمة
+          rm -rf project_files
+          rm -rf nova-nexus.zip
+          rm -rf *.zip
           
-          # حذف كل ملفات البناء القديمة
-          rm -rf .gradle
-          rm -rf build
-          rm -rf app/build
-          rm -rf app/.cxx
-          
-          # حذف كل ملفات APK القديمة
+          # حذف أي APK قديم
           find . -name "*.apk" -type f -delete
-          find . -type d -name "build" -exec rm -rf {} +
           
-          # حذف الملفات المولدة
-          rm -rf app/google-services.json
-          rm -rf debug.keystore
-          rm -rf release.keystore
-          rm -rf .idea
-          rm -rf local.properties
+          # حذف caches
+          rm -rf ~/.gradle/caches/
+          rm -rf .gradle
           
-          echo "=== ALL CLEANED ==="
+          echo "All old files cleaned!"
+          ls -la
 
-      - name: Prepare build environment
+      - name: Download latest project ZIP
         run: |
-          mkdir -p app
-          touch .env .env.example
+          echo "======================================"
+          echo "DOWNLOADING LATEST PROJECT"
+          echo "======================================"
           
-          # إنشاء keystore جديد
-          keytool -genkey -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-          
-          # إنشاء google-services.json
-          echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
-          
-          # عرض معلومات المشروع الحالي للتأكد
-          echo "=== Current Project Info ==="
-          if [ -f "app/build.gradle" ]; then
-            cat app/build.gradle | grep -E "applicationId|namespace"
-          elif [ -f "app/build.gradle.kts" ]; then
-            cat app/build.gradle.kts | grep -E "applicationId|namespace"
+          # تحميل أحدث ملف ZIP من repository
+          # الطريقة الأولى: إذا كان الملف موجود في repository
+          if [ -f "nova-nexus.zip" ]; then
+            echo "Found nova-nexus.zip"
+          else
+            echo "ERROR: nova-nexus.zip not found!"
+            echo "Files in repository:"
+            ls -la
+            exit 1
           fi
-          echo "=== End Project Info ==="
+
+      - name: Extract Android project
+        run: |
+          echo "======================================"
+          echo "EXTRACTING PROJECT"
+          echo "======================================"
+          
+          rm -rf project_files
+          mkdir -p project_files
+          
+          # استخراج الملف الجديد
+          unzip -o nova-nexus.zip -d project_files
+          
+          echo "Project extracted successfully!"
+          cd project_files
+          ls -la
+
+      - name: Create debug keystore
+        working-directory: project_files
+        run: |
+          echo "======================================"
+          echo "CREATING DEBUG KEYSTORE"
+          echo "======================================"
+
+          if [ -f "debug.keystore" ]; then
+            echo "debug.keystore already exists."
+          else
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "debug.keystore created successfully."
+          fi
+
+          ls -lh debug.keystore
+
+      - name: Check Gradle
+        working-directory: project_files
+        run: |
+          echo "======================================"
+          echo "GRADLE VERSION"
+          echo "======================================"
+
+          gradle --version
 
       - name: Build Debug APK
+        working-directory: project_files
         run: |
-          # تنظيف إضافي قبل البناء
-          gradle clean cleanBuildCache --no-daemon
+          echo "======================================"
+          echo "BUILDING APK"
+          echo "======================================"
+
+          # تنظيف قبل البناء
+          gradle clean --no-daemon
           
-          # البناء مع تجاهل cache
-          gradle assembleDebug \
-            --no-configuration-cache \
+          # بناء APK جديد
+          gradle :app:assembleDebug \
+            --stacktrace \
+            --info \
             --no-daemon \
             --no-build-cache \
-            --refresh-dependencies \
-            --rerun-tasks \
-            --stacktrace
+            --rerun-tasks
 
-      - name: Verify built APK
+      - name: Locate APK
+        if: success()
         run: |
-          echo "=== Built APK Files ==="
-          find . -name "*.apk" -type f -ls
-          
-          # التحقق من اسم الحزمة في APK
-          APK_FILE=$(find . -name "*.apk" -type f | head -1)
-          if [ -n "$APK_FILE" ]; then
-            echo "APK found: $APK_FILE"
-            # استخدام aapt للتحقق من اسم الحزمة
-            if command -v aapt2 &> /dev/null; then
-              aapt2 dump packagename "$APK_FILE"
-            fi
-          fi
+          echo "======================================"
+          echo "APK FILES"
+          echo "======================================"
 
-      - name: Upload Debug APK
+          find project_files \
+            -type f \
+            -name "*.apk" \
+            -print
+
+      - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: "**/build/outputs/apk/debug/*.apk"
-          retention-days: 14
+          name: NovaNexus-debug-apk-$(date +%Y%m%d-%H%M%S)
+          path: project_files/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Build completed
+        if: success()
+        run: |
+          echo ""
+          echo "======================================"
+          echo "     BUILD SUCCESS"
+          echo "======================================"
+          echo ""
+
+          find project_files/app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -exec ls -lh {} \;
