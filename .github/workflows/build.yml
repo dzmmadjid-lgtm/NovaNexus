@@ -4,21 +4,13 @@ on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
-    inputs:
-      clean_build:
-        description: 'Force clean build'
-        required: false
-        default: true
-        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout repository (clean)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           clean: true
@@ -29,7 +21,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -39,36 +30,41 @@ jobs:
         with:
           gradle-version: 8.11.1
 
-      - name: Clean everything
+      - name: CLEAN EVERYTHING
         run: |
-          echo "Starting complete clean..."
-          # Stop gradle daemon
+          # إيقاف gradle daemon
           gradle --stop || true
-          # Remove all caches
+          
+          # حذف جميع الـ caches
           rm -rf ~/.gradle/caches/
           rm -rf ~/.gradle/wrapper/
+          rm -rf ~/.m2/repository/
+          
+          # حذف كل ملفات البناء القديمة
           rm -rf .gradle
           rm -rf build
           rm -rf app/build
           rm -rf app/.cxx
-          rm -rf .idea
-          rm -rf *.apk
-          rm -rf app/*.apk
-          # Remove old generated files
+          
+          # حذف كل ملفات APK القديمة
+          find . -name "*.apk" -type f -delete
+          find . -type d -name "build" -exec rm -rf {} +
+          
+          # حذف الملفات المولدة
           rm -rf app/google-services.json
           rm -rf debug.keystore
           rm -rf release.keystore
-          find . -name "*.apk" -type f -delete
-          find . -type d -name "build" -exec rm -rf {} +
-          echo "Clean completed!"
+          rm -rf .idea
+          rm -rf local.properties
+          
+          echo "=== ALL CLEANED ==="
 
       - name: Prepare build environment
         run: |
           mkdir -p app
-          # Create empty env files
           touch .env .env.example
           
-          # Create debug keystore with unique name
+          # إنشاء keystore جديد
           keytool -genkey -v \
             -keystore debug.keystore \
             -storepass android \
@@ -79,47 +75,51 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
           
-          # Create google-services.json
+          # إنشاء google-services.json
           echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
           
-          # Show current project info
-          echo "Current package name:"
-          grep -r "applicationId" app/build.gradle* || echo "No build.gradle found"
-          grep -r "namespace" app/build.gradle* || echo "No namespace found"
+          # عرض معلومات المشروع الحالي للتأكد
+          echo "=== Current Project Info ==="
+          if [ -f "app/build.gradle" ]; then
+            cat app/build.gradle | grep -E "applicationId|namespace"
+          elif [ -f "app/build.gradle.kts" ]; then
+            cat app/build.gradle.kts | grep -E "applicationId|namespace"
+          fi
+          echo "=== End Project Info ==="
 
-      - name: Build Debug APK (with full clean)
+      - name: Build Debug APK
         run: |
-          echo "Building with full clean..."
-          gradle clean cleanBuildCache
+          # تنظيف إضافي قبل البناء
+          gradle clean cleanBuildCache --no-daemon
+          
+          # البناء مع تجاهل cache
           gradle assembleDebug \
             --no-configuration-cache \
             --no-daemon \
-            --stacktrace \
-            --refresh-dependencies \
             --no-build-cache \
-            --rerun-tasks
+            --refresh-dependencies \
+            --rerun-tasks \
+            --stacktrace
 
-      - name: List built APKs
+      - name: Verify built APK
         run: |
-          echo "Built APK files:"
-          find . -name "*.apk" -type f
+          echo "=== Built APK Files ==="
+          find . -name "*.apk" -type f -ls
           
+          # التحقق من اسم الحزمة في APK
+          APK_FILE=$(find . -name "*.apk" -type f | head -1)
+          if [ -n "$APK_FILE" ]; then
+            echo "APK found: $APK_FILE"
+            # استخدام aapt للتحقق من اسم الحزمة
+            if command -v aapt2 &> /dev/null; then
+              aapt2 dump packagename "$APK_FILE"
+            fi
+          fi
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-$(date +%Y%m%d-%H%M%S)
+          name: app-debug-apk
           path: "**/build/outputs/apk/debug/*.apk"
           retention-days: 14
           if-no-files-found: error
-
-      - name: Create Release (optional)
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: "**/build/outputs/apk/debug/*.apk"
-          tag_name: "build-${{ github.run_number }}"
-          name: "Build ${{ github.run_number }}"
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
