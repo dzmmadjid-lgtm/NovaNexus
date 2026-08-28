@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       target_zip:
-        description: 'Specific ZIP filename to build (e.g. architecture-samples-main.zip)'
+        description: 'Specific ZIP filename to build'
         required: false
         default: ''
 
@@ -15,26 +15,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout Clean Repository
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
         with:
           clean: true
           fetch-depth: 1
 
-      - name: 2. Locate and Verify Selected Target Project
-        id: select_project
+      - name: 2. Locate and Verify Target Project
+        id: verify_step
         run: |
           echo "========================================================"
-          echo "🔍 AUDIT STEP 1: REPOSITORY FILE INSPECTION"
+          echo "🔍 AUDIT: VALIDATING TARGET PROJECT ZIP FILE"
           echo "========================================================"
-          pwd
-          ls -lh
           
           SPECIFIED_ZIP="${{ github.event.inputs.target_zip }}"
           CHOSEN_ZIP=""
           
           if [ -n "$SPECIFIED_ZIP" ]; then
-            echo "User requested specific project: $SPECIFIED_ZIP"
+            echo "Explicit target project requested: '$SPECIFIED_ZIP'"
             if [ -f "$SPECIFIED_ZIP" ]; then
               CHOSEN_ZIP="$SPECIFIED_ZIP"
             else
@@ -42,76 +40,54 @@ jobs:
               exit 1
             fi
           else
-            # Search for zip files in repository
             ZIP_COUNT=$(find . -maxdepth 2 -type f -name "*.zip" | wc -l)
-            echo "Total zip files detected in repository: $ZIP_COUNT"
-            find . -maxdepth 2 -type f -name "*.zip" -exec ls -lh {} +
-            
             if [ "$ZIP_COUNT" -gt 0 ]; then
-              # Pick the newest zip file based on timestamp
               CHOSEN_ZIP=$(find . -maxdepth 2 -type f -name "*.zip" -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
-              echo "🎯 Auto-selected newest ZIP archive: $CHOSEN_ZIP"
+              echo "Auto-selected newest ZIP archive: $CHOSEN_ZIP"
             else
-              echo "ℹ️ No ZIP file found in repository. Using direct repository source."
+              echo "Using direct repository source."
             fi
           fi
 
           if [ -n "$CHOSEN_ZIP" ] && [ -f "$CHOSEN_ZIP" ]; then
             FILE_SIZE=$(ls -lh "$CHOSEN_ZIP" | awk '{print $5}')
-            FILE_SHA256=$(sha256sum "$CHOSEN_ZIP" | awk '{print $1}')
             echo "TRANSFERRED_FILE=$CHOSEN_ZIP" >> $GITHUB_ENV
             echo "TRANSFERRED_FILE_SIZE=$FILE_SIZE" >> $GITHUB_ENV
-            echo "FILE_SHA256=$FILE_SHA256" >> $GITHUB_ENV
             echo "IS_ZIP=true" >> $GITHUB_ENV
           else
             echo "TRANSFERRED_FILE=Direct-Repo-Source" >> $GITHUB_ENV
             echo "TRANSFERRED_FILE_SIZE=N/A" >> $GITHUB_ENV
-            echo "FILE_SHA256=N/A" >> $GITHUB_ENV
             echo "IS_ZIP=false" >> $GITHUB_ENV
           fi
-          
           echo "SELECTED_FILE=${SPECIFIED_ZIP:-$CHOSEN_ZIP}" >> $GITHUB_ENV
 
       - name: 3. Create Fresh Isolated Workspace & Extract
-        id: extract_step
         run: |
           ISOLATED_DIR="${{ runner.temp }}/isolated_build_workspace_$(date +%s)"
           rm -rf "$ISOLATED_DIR"
           mkdir -p "$ISOLATED_DIR"
           
           if [ "$IS_ZIP" = "true" ]; then
-            echo "📦 Unzipping $TRANSFERRED_FILE into $ISOLATED_DIR..."
             unzip -q -o "$TRANSFERRED_FILE" -d "$ISOLATED_DIR"
           else
-            echo "📁 Copying clean repository files to isolated workspace..."
             rsync -av --exclude='.git' --exclude='.github' ./ "$ISOLATED_DIR/"
           fi
-          
           echo "EXTRACTED_PATH=$ISOLATED_DIR" >> $GITHUB_ENV
 
-      - name: 4. Detect True Project Root & Verify Identity
-        id: root_identity
+      - name: 4. Detect True Project Root & Settings
         run: |
           SETTINGS_FILE=$(find "$EXTRACTED_PATH" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
-          
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "❌ CRITICAL ERROR: Could not locate 'settings.gradle' or 'settings.gradle.kts' in extracted workspace!"
+            echo "❌ CRITICAL ERROR: Could not locate 'settings.gradle' or 'settings.gradle.kts'!"
             exit 1
           fi
           
           REAL_ROOT=$(dirname "$SETTINGS_FILE")
-          
-          if [ ! -f "$REAL_ROOT/build.gradle" ] && [ ! -f "$REAL_ROOT/build.gradle.kts" ]; then
-            echo "❌ CRITICAL ERROR: Found settings.gradle but missing root build.gradle(.kts) in $REAL_ROOT"
-            exit 1
-          fi
-          
           PROJECT_NAME=$(grep -oE 'rootProject\.name\s*=\s*["'"'"'][^"'"'"']+["'"'"']' "$SETTINGS_FILE" | sed -E 's/rootProject\.name\s*=\s*["'"'"']([^"'"'"']+)["'"'"']/\1/' | head -n 1)
           if [ -z "$PROJECT_NAME" ]; then
-            PROJECT_NAME="AndroidProject"
+            PROJECT_NAME="AndroidApp"
           fi
 
-          # Detect Gradle Version from wrapper
           WRAPPER_PROP="$REAL_ROOT/gradle/wrapper/gradle-wrapper.properties"
           DETECTED_GRADLE="9.3.1"
           if [ -f "$WRAPPER_PROP" ]; then
@@ -126,11 +102,10 @@ jobs:
           echo "SELECTED_FILE=$SELECTED_FILE"
           echo "TRANSFERRED_FILE=$TRANSFERRED_FILE"
           echo "TRANSFERRED_FILE_SIZE=$TRANSFERRED_FILE_SIZE"
-          echo "FILE_SHA256=$FILE_SHA256"
           echo "EXTRACTED_PATH=$EXTRACTED_PATH"
           echo "PROJECT_ROOT=$REAL_ROOT"
           echo "ROOT_PROJECT_NAME=$PROJECT_NAME"
-          echo "TARGET_GRADLE_VERSION=$DETECTED_GRADLE"
+          echo "DETECTED_GRADLE=$DETECTED_GRADLE"
           echo "========================================================"
 
           echo "PROJECT_ROOT=$REAL_ROOT" >> $GITHUB_ENV
@@ -146,12 +121,12 @@ jobs:
       - name: 6. Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 7. Setup Matching Gradle Version (${{ env.DETECTED_GRADLE }})
+      - name: 7. Setup Gradle (${{ env.DETECTED_GRADLE }})
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: ${{ env.DETECTED_GRADLE }}
 
-      - name: 8. Prepare Local Environment in True Root
+      - name: 8. Prepare Local Environment
         run: |
           cd "$PROJECT_ROOT"
           if [ ! -f "debug.keystore" ]; then
@@ -159,9 +134,8 @@ jobs:
           fi
           touch .env .env.example local.properties
 
-      - name: 9. Execute Gradle Build
+      - name: 9. Execute Verified Build
         run: |
-          echo "🚀 Executing build for: $ROOT_PROJECT_NAME in $PROJECT_ROOT"
           cd "$PROJECT_ROOT"
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
