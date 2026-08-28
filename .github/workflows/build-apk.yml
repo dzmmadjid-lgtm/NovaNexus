@@ -19,15 +19,23 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew || true
-
-      - name: Build with Gradle
+      - name: Locate Project and Build
         run: |
+          # البحث عن مكان ملف settings.gradle في أي مجلد
+          PROJECT_DIR=$(find . -name "settings.gradle" -o -name "settings.gradle.kts" | head -n 1 | xargs dirname)
+          
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR="."
+          fi
+          
+          echo "Building in: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          
           if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
             ./gradlew assembleDebug
           else
-            gradle assembleDebug || gradle build
+            gradle assembleDebug
           fi
 
       - name: Upload APK
