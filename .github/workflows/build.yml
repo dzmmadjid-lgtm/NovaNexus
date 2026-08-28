@@ -2,8 +2,9 @@ name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -13,104 +14,33 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          clean: true
-          fetch-depth: 1
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
           java-version: '17'
+          distribution: 'temurin'
 
-      # تعطيل الكاش التلقائي لضمان بناء المشروع الجديد تماماً
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-          cache-disabled: true
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
-      - name: Extract Android project (clic.zip)
+      - name: Grant execute permission for gradlew
         run: |
-          echo "======================================"
-          echo "EXTRACTING NEW PROJECT"
-          echo "======================================"
-          rm -rf clic_project
-          mkdir -p clic_project
-          
-          # فك الضغط مع الاستبدال الإجباري
-          unzip -o clic.zip -d temp_extract
-          
-          # نقل محتويات المشروع مباشرة إلى clic_project حتى لو كانت داخل مجلد فرعي
-          ROOT_DIR=$(find temp_extract -name "settings.gradle.kts" -printf '%h' -quit)
-          if [ -n "$ROOT_DIR" ]; then
-             echo "Found settings.gradle.kts in: $ROOT_DIR"
-             cp -r $ROOT_DIR/* clic_project/
-             rm -rf temp_extract
-          else
-             echo "ERROR: settings.gradle.kts not found!"
-             exit 1
+          if [ -f "./gradlew" ]; then
+            chmod +x gradlew
           fi
 
-          ls -la clic_project
-
-      - name: Create debug keystore
-        working-directory: clic_project
-        run: |
-          echo "======================================"
-          echo "CREATING DEBUG KEYSTORE"
-          echo "======================================"
-
-          rm -f debug.keystore
-          keytool -genkeypair \
-            -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
-
-          echo "debug.keystore created successfully."
-          ls -lh debug.keystore
-
-      # إضافة clean مع --no-build-cache لمنع استخدام أي كاش قديم
       - name: Build Debug APK
-        working-directory: clic_project
         run: |
-          echo "======================================"
-          echo "BUILDING FRESH APK"
-          echo "======================================"
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
 
-          gradle clean :app:assembleDebug \
-            --no-build-cache \
-            --no-daemon \
-            --stacktrace
-
-      - name: Locate APK
-        if: success()
-        run: |
-          echo "======================================"
-          echo "GENERATED APK FILES"
-          echo "======================================"
-
-          find clic_project -type f -name "*.apk" -print
-
-      # رفع ملف الـ APK باسم فريد يتضمن وقت البناء أو رقم الـ Run
-      - name: Upload APK
-        if: success()
+      - name: Locate and Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Clic-debug-apk-${{ github.run_number }}
-          path: clic_project/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-
-      - name: Build completed
-        if: success()
-        run: |
-          echo ""
-          echo "======================================"
-          echo "       BUILD SUCCESSFUL"
-          echo "======================================"
+          name: pubg-ping-booster-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
