@@ -1,9 +1,10 @@
-name: Build Android APK
+name: Dynamic Clean Android Builder
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -11,110 +12,148 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      # 1. جلب أحدث نسخة نظيفة من المستودع
+      - name: 1. Checkout Clean Repository
         uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
         with:
-          distribution: temurin
-          java-version: '17'
+          clean: true
+          fetch-depth: 1
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-
-      - name: Extract Android project
+      # 2. فحص محتويات المستودع وكشف ملفات ZIP
+      - name: 2. Inspect Repository & Locate ZIP
+        id: locate_zip
         run: |
-          rm -rf project_files
-          mkdir -p project_files
-          unzip -o nova-nexus.zip -d project_files
-
-          echo "======================================"
-          echo "PROJECT EXTRACTED"
-          echo "======================================"
-
-          cd project_files
+          echo "========================================================"
+          echo "🔍 AUDIT STEP 1: SCANNING REPOSITORY CONTENTS"
+          echo "========================================================"
+          pwd
           ls -la
-
-      - name: Create debug keystore
-        working-directory: project_files
-        run: |
-          echo "======================================"
-          echo "CREATING DEBUG KEYSTORE"
-          echo "======================================"
-
-          if [ -f "debug.keystore" ]; then
-            echo "debug.keystore already exists."
+          
+          # البحث عن أحدث ملف ZIP في المستودع
+          LATEST_ZIP=$(find . -maxdepth 2 -type f -name "*.zip" -printf '%T@ %p\n' | sort -n | tail -1 | cut -f2- -d" ")
+          
+          if [ -n "$LATEST_ZIP" ]; then
+            echo "✅ FOUND ZIP ARCHIVE: $LATEST_ZIP"
+            echo "ZIP_PATH=$LATEST_ZIP" >> $GITHUB_ENV
+            echo "HAS_ZIP=true" >> $GITHUB_ENV
+            ls -lh "$LATEST_ZIP"
           else
-            keytool -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-
-            echo "debug.keystore created successfully."
+            echo "ℹ️ NO ZIP FILE FOUND. Checking for raw source files..."
+            echo "HAS_ZIP=false" >> $GITHUB_ENV
           fi
 
-          ls -lh debug.keystore
-
-      - name: Check Gradle
-        working-directory: project_files
+      # 3. إنشاء مساحة عمل نظيفة ومعزولة وفك الضغط
+      - name: 3. Create Clean Workspace & Extract Project
+        id: setup_workspace
         run: |
-          echo "======================================"
-          echo "GRADLE VERSION"
-          echo "======================================"
+          echo "========================================================"
+          echo "🧹 AUDIT STEP 2: CREATING ISOLATED WORKSPACE"
+          echo "========================================================"
+          
+          # مسار مساحة العمل النظيفة المعزولة
+          WORK_DIR="${{ github.workspace }}/clean_project_workspace"
+          rm -rf "$WORK_DIR"
+          mkdir -p "$WORK_DIR"
+          
+          if [ "$HAS_ZIP" = "true" ]; then
+            echo "📦 Extracting $ZIP_PATH into $WORK_DIR ..."
+            unzip -o -q "$ZIP_PATH" -d "$WORK_DIR"
+            echo "✅ Extraction complete."
+          else
+            echo "📁 Copying repository files to clean workspace..."
+            rsync -av --exclude='.git' --exclude='.github' --exclude='clean_project_workspace' ./ "$WORK_DIR/"
+          fi
 
-          gradle --version
+          echo "========================================================"
+          echo "📂 AUDIT STEP 3: WORKSPACE CONTENTS AFTER EXTRACTION"
+          echo "========================================================"
+          cd "$WORK_DIR"
+          ls -la
+          
+          # 4. البحث الذكي والديناميكي عن ملف settings.gradle(.kts)
+          echo "🔍 Searching for Android Project Root (settings.gradle / settings.gradle.kts)..."
+          SETTINGS_FILE=$(find "$WORK_DIR" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_ROOT=$(dirname "$SETTINGS_FILE")
+            echo "🎯 REAL ANDROID PROJECT ROOT DETECTED AT: $PROJECT_ROOT"
+            echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_ENV
+          else
+            echo "⚠️ Could not find settings.gradle. Checking for build.gradle..."
+            BUILD_FILE=$(find "$WORK_DIR" -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
+            if [ -n "$BUILD_FILE" ]; then
+              PROJECT_ROOT=$(dirname "$BUILD_FILE")
+              echo "🎯 ROOT DETECTED VIA BUILD FILE AT: $PROJECT_ROOT"
+              echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_ENV
+            else
+              echo "❌ ERROR: No Android project files (settings.gradle/build.gradle) found!"
+              exit 1
+            fi
+          fi
 
-      - name: Build Debug APK
-        working-directory: project_files
+      # 4. تجهيز بيئة Java 17
+      - name: 4. Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # 5. تجهيز Android SDK
+      - name: 5. Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6. تجهيز Gradle
+      - name: 6. Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      # 7. تجهيز التوقيع والمفاتيح داخل مجلد المشروع المكتشف
+      - name: 7. Prepare Environment in True Project Root
         run: |
-          echo "======================================"
-          echo "BUILDING NOVANEXUS APK"
-          echo "======================================"
+          echo "========================================================"
+          echo "⚙️ AUDIT STEP 4: PREPARING ENVIRONMENT IN: $PROJECT_ROOT"
+          echo "========================================================"
+          cd "$PROJECT_ROOT"
+          
+          # التأكد من مجلد app
+          mkdir -p app
+          
+          # إنشاء مفتاح debug keystore إن لم يوجد
+          if [ ! -f "debug.keystore" ]; then
+            echo "🔑 Generating clean debug.keystore..."
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          
+          # إنشاء ملفات الإعدادات والسر
+          touch .env .env.example
+          
+          # ملف google-services وهمي إن لم يتوفر
+          if [ ! -f "app/google-services.json" ]; then
+            echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
+          fi
 
-          gradle :app:assembleDebug \
-            --stacktrace \
-            --info \
-            --no-daemon
-
-      - name: Locate APK
-        if: success()
+      # 8. تنفيذ أمر البناء الحقيقي من داخل جذر المشروع المكتشف
+      - name: 8. Execute Gradle Build from True Root
         run: |
-          echo "======================================"
-          echo "APK FILES"
-          echo "======================================"
+          echo "========================================================"
+          echo "🚀 AUDIT STEP 5: RUNNING GRADLE BUILD IN: $PROJECT_ROOT"
+          echo "========================================================"
+          cd "$PROJECT_ROOT"
+          
+          if [ -f "./gradlew" ]; then
+            echo "Using project's local gradlew..."
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --no-configuration-cache --no-daemon --stacktrace
+          else
+            echo "Using system Gradle runner..."
+            gradle assembleDebug --no-configuration-cache --no-daemon --stacktrace
+          fi
 
-          find project_files \
-            -type f \
-            -name "*.apk" \
-            -print
-
-      - name: Upload APK
-        if: success()
+      # 9. التقاط ورفع ملف الـ APK الناتج كـ Artifact
+      - name: 9. Upload Generated APK
         uses: actions/upload-artifact@v4
         with:
-          name: NovaNexus-debug-apk
-          path: project_files/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-
-      - name: Build completed
-        if: success()
-        run: |
-          echo ""
-          echo "======================================"
-          echo "     NOVANEXUS BUILD SUCCESS"
-          echo "======================================"
-          echo ""
-
-          find project_files/app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            -exec ls -lh {} \;
+          name: Clean-Build-APK
+          path: "${{ env.PROJECT_ROOT }}/**/build/outputs/apk/debug/*.apk"
+          retention-days: 14
