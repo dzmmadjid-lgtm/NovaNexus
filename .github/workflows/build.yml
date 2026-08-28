@@ -3,23 +3,33 @@ name: Build Android APK
 on:
   push:
     branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Force clean build'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (clean)
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: 'gradle'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -29,26 +39,87 @@ jobs:
         with:
           gradle-version: 8.11.1
 
+      - name: Clean everything
+        run: |
+          echo "Starting complete clean..."
+          # Stop gradle daemon
+          gradle --stop || true
+          # Remove all caches
+          rm -rf ~/.gradle/caches/
+          rm -rf ~/.gradle/wrapper/
+          rm -rf .gradle
+          rm -rf build
+          rm -rf app/build
+          rm -rf app/.cxx
+          rm -rf .idea
+          rm -rf *.apk
+          rm -rf app/*.apk
+          # Remove old generated files
+          rm -rf app/google-services.json
+          rm -rf debug.keystore
+          rm -rf release.keystore
+          find . -name "*.apk" -type f -delete
+          find . -type d -name "build" -exec rm -rf {} +
+          echo "Clean completed!"
+
       - name: Prepare build environment
         run: |
           mkdir -p app
-          # Create empty dummy secrets file if not present
+          # Create empty env files
           touch .env .env.example
-          # Create dummy debug keystore if missing
-          if [ ! -f "debug.keystore" ]; then
-            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          # Create dummy google-services.json if missing
-          if [ ! -f "app/google-services.json" ]; then
-            echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
-          fi
+          
+          # Create debug keystore with unique name
+          keytool -genkey -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          
+          # Create google-services.json
+          echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
+          
+          # Show current project info
+          echo "Current package name:"
+          grep -r "applicationId" app/build.gradle* || echo "No build.gradle found"
+          grep -r "namespace" app/build.gradle* || echo "No namespace found"
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --no-configuration-cache --no-daemon --stacktrace
+      - name: Build Debug APK (with full clean)
+        run: |
+          echo "Building with full clean..."
+          gradle clean cleanBuildCache
+          gradle assembleDebug \
+            --no-configuration-cache \
+            --no-daemon \
+            --stacktrace \
+            --refresh-dependencies \
+            --no-build-cache \
+            --rerun-tasks
 
+      - name: List built APKs
+        run: |
+          echo "Built APK files:"
+          find . -name "*.apk" -type f
+          
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: pubg-ping-booster-debug-apk
+          name: app-debug-$(date +%Y%m%d-%H%M%S)
           path: "**/build/outputs/apk/debug/*.apk"
           retention-days: 14
+          if-no-files-found: error
+
+      - name: Create Release (optional)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "**/build/outputs/apk/debug/*.apk"
+          tag_name: "build-${{ github.run_number }}"
+          name: "Build ${{ github.run_number }}"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
