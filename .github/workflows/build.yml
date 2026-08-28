@@ -13,6 +13,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -20,34 +23,36 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # تعطيل الكاش التلقائي لضمان بناء المشروع الجديد تماماً
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
+          cache-disabled: true
 
       - name: Extract Android project (clic.zip)
         run: |
+          echo "======================================"
+          echo "EXTRACTING NEW PROJECT"
+          echo "======================================"
           rm -rf clic_project
           mkdir -p clic_project
-          # تأكدنا من اسم الملف clic.zip
-          unzip -o clic.zip -d clic_project
-
-          echo "======================================"
-          echo "PROJECT EXTRACTED"
-          echo "======================================"
-
-          cd clic_project
-          ls -la
           
-          # التأكد من وجود settings.gradle.kts و app
-          if [ -f "settings.gradle.kts" ]; then
-             echo "Project root found successfully!"
+          # فك الضغط مع الاستبدال الإجباري
+          unzip -o clic.zip -d temp_extract
+          
+          # نقل محتويات المشروع مباشرة إلى clic_project حتى لو كانت داخل مجلد فرعي
+          ROOT_DIR=$(find temp_extract -name "settings.gradle.kts" -printf '%h' -quit)
+          if [ -n "$ROOT_DIR" ]; then
+             echo "Found settings.gradle.kts in: $ROOT_DIR"
+             cp -r $ROOT_DIR/* clic_project/
+             rm -rf temp_extract
           else
-             echo "WARNING: settings.gradle.kts not found in root. Moving deeper..."
-             # إذا كان الملف داخل مجلد فرعي، سننتقل إليه تلقائياً
-             cd "$(find . -maxdepth 2 -name "settings.gradle.kts" -printf '%h' -quit)"
-             ls -la
+             echo "ERROR: settings.gradle.kts not found!"
+             exit 1
           fi
+
+          ls -la clic_project
 
       - name: Create debug keystore
         working-directory: clic_project
@@ -56,64 +61,50 @@ jobs:
           echo "CREATING DEBUG KEYSTORE"
           echo "======================================"
 
-          if [ -f "debug.keystore" ]; then
-            echo "debug.keystore already exists."
-          else
-            keytool -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+          rm -f debug.keystore
+          keytool -genkeypair \
+            -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-            echo "debug.keystore created successfully."
-          fi
-
+          echo "debug.keystore created successfully."
           ls -lh debug.keystore
 
-      - name: Check Gradle
-        working-directory: clic_project
-        run: |
-          echo "======================================"
-          echo "GRADLE VERSION"
-          echo "======================================"
-
-          gradle --version
-
+      # إضافة clean مع --no-build-cache لمنع استخدام أي كاش قديم
       - name: Build Debug APK
         working-directory: clic_project
         run: |
           echo "======================================"
-          echo "BUILDING CLIC APK"
+          echo "BUILDING FRESH APK"
           echo "======================================"
 
-          gradle :app:assembleDebug \
-            --stacktrace \
-            --info \
-            --no-daemon
+          gradle clean :app:assembleDebug \
+            --no-build-cache \
+            --no-daemon \
+            --stacktrace
 
       - name: Locate APK
         if: success()
         run: |
           echo "======================================"
-          echo "APK FILES"
+          echo "GENERATED APK FILES"
           echo "======================================"
 
-          find clic_project \
-            -type f \
-            -name "*.apk" \
-            -print
+          find clic_project -type f -name "*.apk" -print
 
+      # رفع ملف الـ APK باسم فريد يتضمن وقت البناء أو رقم الـ Run
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Clic-debug-apk
-          path: clic_project/**/build/outputs/apk/debug/*.apk
+          name: Clic-debug-apk-${{ github.run_number }}
+          path: clic_project/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Build completed
@@ -121,6 +112,5 @@ jobs:
         run: |
           echo ""
           echo "======================================"
-          echo "       CLIC BUILD SUCCESS"
+          echo "       BUILD SUCCESSFUL"
           echo "======================================"
-          echo ""
