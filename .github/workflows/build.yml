@@ -29,18 +29,47 @@ jobs:
         with:
           gradle-version: 8.11.1
 
-      - name: Generate Dummy Google Services if missing
+      - name: Ensure app directory and google-services.json
         run: |
+          mkdir -p app
           if [ ! -f "app/google-services.json" ]; then
-            echo '{"project_info":{"project_number":"0","project_id":"dummy"},"client":[{"client_info":{"mobilesdk_app_id":"1:0:android:0","android_client_info":{"package_name":"com.example"}},"api_key":[{"current_key":"dummy"}]}]}' > app/google-services.json
+            cat << 'EOF' > app/google-services.json
+          {
+            "project_info": {
+              "project_number": "0",
+              "project_id": "dummy"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:0:android:0",
+                  "android_client_info": {
+                    "package_name": "com.example"
+                  }
+                },
+                "api_key": [
+                  {
+                    "current_key": "dummy"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
           fi
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: pubg-ping-booster-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: "**/build/outputs/apk/debug/*.apk"
           retention-days: 14
